@@ -23,8 +23,8 @@ Tracked implementation for the user's requested activity. Read through `## Log` 
 
 - T1 [S1-S3,S11-S12] Build the Node.js/Express API with PostgreSQL persistence and tests. Commit: `e8c27ee` (runtime tests unavailable because Node/npm are not installed).
 - T2 [S2,S4-S5,S14] Build parameterized Terraform EC2/RDS/network/secrets configuration without creating IAM roles. Commit: `8def990` (fmt passed; validate timed out in the local Terraform process).
-- T3 [S6-S10,S13] Add CI/CD, release, deployment, and health-monitoring workflows. Commit: pending.
-- T4 [S1-S14] Validate locally; validate Terraform statically; validate AWS only after credentials are refreshed. Commit: pending.
+- T3 [S6-S10,S13] Add CI/CD, release, deployment, and health-monitoring workflows. Commit: `8981256` (workflow YAML parsed successfully; GitHub-hosted execution remains unverified).
+- T4 [S1-S14] Validate locally; validate Terraform statically; validate AWS only after credentials are refreshed. Commit: pending; blocked by missing Node/npm, stopped Docker engine, Terraform validation timeout, and invalid AWS credentials.
 
 ## Log
 
