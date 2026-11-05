@@ -1,0 +1,73 @@
+#!/bin/bash
+set -euxo pipefail
+
+dnf update -y
+dnf install -y git nodejs awscli postgresql15 python3
+
+mkdir -p /opt/to-do-list-api
+if [ -d /opt/to-do-list-api/.git ]; then
+  git -C /opt/to-do-list-api fetch --tags origin
+  git -C /opt/to-do-list-api checkout main
+  git -C /opt/to-do-list-api pull --ff-only
+else
+  git clone '${repository_url}' /opt/to-do-list-api
+fi
+
+cd /opt/to-do-list-api
+npm ci --omit=dev
+
+SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id '${secret_arn}' --query SecretString --output text --region '${aws_region}')
+export DB_HOST=$(printf '%s' "$SECRET_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["host"])')
+export DB_PORT=$(printf '%s' "$SECRET_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["port"])')
+export DB_NAME=$(printf '%s' "$SECRET_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["database"])')
+export DB_USER=$(printf '%s' "$SECRET_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["username"])')
+export DB_PASSWORD=$(printf '%s' "$SECRET_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["password"])')
+export DB_SSL=true
+export APP_VERSION='${app_version}'
+export PORT='${app_port}'
+
+for attempt in $(seq 1 30); do
+  if PGPASSWORD="$DB_PASSWORD" psql "host=$DB_HOST port=$DB_PORT dbname=$DB_NAME user=$DB_USER sslmode=require" -f db/schema.sql; then
+    break
+  fi
+  if [ "$attempt" -eq 30 ]; then
+    echo 'Database did not become ready in time' >&2
+    exit 1
+  fi
+  sleep 10
+done
+
+chown -R ec2-user:ec2-user /opt/to-do-list-api
+cat > /etc/to-do-list-api.env <<EOF
+DB_HOST=$DB_HOST
+DB_PORT=$DB_PORT
+DB_NAME=$DB_NAME
+DB_USER=$DB_USER
+DB_PASSWORD=$DB_PASSWORD
+DB_SSL=$DB_SSL
+APP_VERSION=$APP_VERSION
+PORT=$PORT
+EOF
+chmod 600 /etc/to-do-list-api.env
+
+cat > /etc/systemd/system/to-do-list-api.service <<'EOF'
+[Unit]
+Description=to-do-list-api
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/opt/to-do-list-api
+EnvironmentFile=/etc/to-do-list-api.env
+ExecStart=/usr/bin/npm start
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now to-do-list-api
