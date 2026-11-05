@@ -21,8 +21,8 @@ Tracked implementation for the user's requested activity. Read through `## Log` 
 
 ## Tasks
 
-- T1 [S1-S3,S11-S12] Build the Node.js/Express API with PostgreSQL persistence and tests. Commit: pending.
-- T2 [S2,S4-S5,S14] Build parameterized Terraform EC2/RDS/network/secrets configuration without creating IAM roles. Commit: pending.
+- T1 [S1-S3,S11-S12] Build the Node.js/Express API with PostgreSQL persistence and tests. Commit: `e8c27ee` (runtime tests unavailable because Node/npm are not installed).
+- T2 [S2,S4-S5,S14] Build parameterized Terraform EC2/RDS/network/secrets configuration without creating IAM roles. Commit: `8def990` (fmt passed; validate timed out in the local Terraform process).
 - T3 [S6-S10,S13] Add CI/CD, release, deployment, and health-monitoring workflows. Commit: pending.
 - T4 [S1-S14] Validate locally; validate Terraform statically; validate AWS only after credentials are refreshed. Commit: pending.
 
@@ -30,3 +30,4 @@ Tracked implementation for the user's requested activity. Read through `## Log` 
 
 - L1: User requested implementation and testing of the activity described in the conversation, stated that Node.js + Express + PostgreSQL and the current repository/public-repository direction are acceptable, and asked the assistant to use AWS CLI to identify the active account.
 - L2: AWS CLI configuration reports region `us-east-1`, but `aws sts get-caller-identity` fails with `InvalidClientTokenId`; credentials must be refreshed before cloud provisioning can be tested.
+- L3: Local toolchain has Terraform v1.10.5 and Docker installed, but Node/npm are absent and Docker Desktop is not running. Terraform formatting passed; Terraform validation timed out after provider initialization. Workflow YAML parsed successfully with PyYAML.

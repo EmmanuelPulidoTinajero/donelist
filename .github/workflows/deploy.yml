@@ -1,0 +1,25 @@
+name: Deploy release to EC2
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: infrastructure
+    steps:
+      - name: Install SSH key
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' '${{ secrets.EC2_SSH_PRIVATE_KEY }}' > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H '${{ secrets.EC2_HOST }}' >> ~/.ssh/known_hosts
+      - name: Pull and restart release
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          ssh ec2-user@'${{ secrets.EC2_HOST }}' "cd /opt/to-do-list-api && git fetch --tags origin && git checkout \"$RELEASE_TAG\" && npm ci --omit=dev && sudo systemctl restart to-do-list-api"
