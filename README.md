@@ -43,15 +43,26 @@ The S3 backend bucket must already exist and be permitted by the lab role; Terra
 
 ## GitHub Actions
 
-- `test.yml`: runs unit tests for every pull request.
+- `test.yml`: runs the unit test suite for every pull request.
 - `terraform-apply.yml`: manual provisioning workflow using the `infrastructure` environment.
 - `terraform-destroy.yml`: manual cleanup workflow.
-- `release.yml`: creates a GitHub release for tags matching `v*.*.*`.
-- `deploy.yml`: on a published release, SSHs to EC2, checks out the release tag, installs dependencies, and restarts the systemd service.
-- `health-monitor.yml`: checks `${API_URL}/health` every five minutes and fails unless the endpoint returns HTTP 200.
+- `release.yml`: for tags matching `v*.*.*`, packages the repository with `git archive` and attaches the zip to a GitHub release.
+- `deploy.yml`: on a published release, copies [`scripts/deploy-release.sh`](scripts/deploy-release.sh) to EC2, which downloads the release asset, installs it, records the tag as `APP_VERSION` and restarts the systemd service until `/version` reports the new version.
+- `health-monitor.yml`: checks `${API_URL}/health` every five minutes, opens or updates an issue titled `[health-check-alert]` when it fails, and closes that issue after a passing run.
 
 Configure these repository/environment values before using workflows:
 
 - Secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, optional `AWS_SESSION_TOKEN`, `EC2_SSH_PRIVATE_KEY`, and `EC2_HOST`.
 - Variables: `AWS_REGION`, `API_URL`, `TF_STATE_BUCKET`, `AMI_ID`, `INSTANCE_PROFILE_NAME`, and `SSH_KEY_NAME`.
 - `terraform-apply.yml` and `terraform-destroy.yml` generate a temporary variables file and use the shared S3 backend; the state is never committed. The backend bucket must be provisioned separately because the learned-lab role may not permit Terraform to create it.
+
+### Required status check
+
+The grading checklist requires a failing CI run to block merges into `main`. That is a repository setting, so it has to be applied once by hand:
+
+1. Open any pull request so the `Tests` workflow runs at least once; a check name only becomes selectable after its first run.
+2. Go to **Settings → Branches → Add branch protection rule** (or edit the existing rule for `main`).
+3. Enable **Require status checks to pass before merging** and select `Tests / Unit tests`.
+4. Leave the workflow name `Tests` and the job name `Unit tests` untouched: the required check matches on both.
+
+The job runs `npm test`, which executes the suites in `test/app.test.js`, `test/metrics.test.js` and `test/secrets.test.js`; it uses `npm ci`, so `package-lock.json` must stay committed.

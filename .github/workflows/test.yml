@@ -3,9 +3,19 @@ name: Tests
 on:
   pull_request:
 
+permissions:
+  contents: read
+
+# A new push supersedes the previous run for the same pull request.
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
+    name: Unit tests
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
