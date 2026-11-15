@@ -1,0 +1,8 @@
+# Normalize line endings for a project deployed on Linux (EC2).
+# Text files are stored with LF in the repository; Git detects binaries automatically.
+* text=auto eol=lf
+
+# Windows-only scripts keep CRLF so they stay runnable on Windows.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
