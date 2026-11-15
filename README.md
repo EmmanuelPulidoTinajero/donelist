@@ -1,81 +1,152 @@
 # to-do-list-api
 
-A small Node.js/Express to-do API backed by PostgreSQL. The Terraform configuration provisions an EC2 application server, a private PostgreSQL RDS instance, a Secrets Manager secret, and security groups.
+A small Node.js/Express to-do API backed by PostgreSQL, provisioned end to end with Terraform and operated through GitHub Actions.
+
+Terraform creates the EC2 application server, the private PostgreSQL RDS instance, the Secrets Manager secret that holds the database credentials, the EC2 key pair, the security groups, the SNS topic and the CloudWatch alarms and dashboard. The EC2 bootstrap installs and runs the API without any manual step.
 
 ## API
 
+| Route | Behaviour |
+| --- | --- |
+| `GET /tasks` | Returns tasks ordered by ID. |
+| `POST /tasks` | Accepts `{ "title": "..." }` and stores a task. |
+| `GET /version` | Returns the deployed `APP_VERSION` as `{ "version": "..." }`. |
+| `GET /health` | Runs `SELECT 1`; returns HTTP 200 with `status: "OK"`, the version and a timestamp, or HTTP 503 with `status: "FAIL"` when the database is unreachable. |
+
+`db/schema.sql` creates the table.
+
+### Run locally
+
 ```bash
 npm ci
-npm test
 DB_HOST=localhost DB_NAME=tasks DB_USER=tasks_app DB_PASSWORD=secret npm start
 ```
 
-The application exposes:
+Without `DB_SECRET_ARN` the API reads `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` and `DB_SSL` from the environment. On EC2 only `DB_SECRET_ARN` is set: the API fetches the credentials from Secrets Manager at startup, so no password is ever written into the repository, the user data or the systemd unit.
 
-- `GET /tasks` — returns tasks ordered by ID.
-- `POST /tasks` — accepts `{ "title": "..." }` and stores a task.
-- `GET /version` — returns the configured `APP_VERSION`.
-- `GET /health` — runs `SELECT 1`; returns HTTP 200 and `status: "OK"` when the database is available, otherwise HTTP 503 and `status: "FAIL"`.
-
-Initialize a database with [`db/schema.sql`](db/schema.sql).
-
-## Terraform
-
-Terraform files are under [`infra/`](infra). This configuration deliberately creates **no IAM role** because the learned lab permits only one existing role. Supply an existing EC2 instance profile through `instance_profile_name`; that role must be trusted by EC2 and permit `secretsmanager:GetSecretValue` for the generated database secret. If the existing lab role is not EC2-assumable, the lab must provide an existing instance profile; Terraform cannot safely convert an arbitrary role without creating or changing IAM resources.
-
-The configuration uses the default VPC and its subnets, creates a private RDS PostgreSQL instance, permits PostgreSQL only from the EC2 security group, and stores database credentials in Secrets Manager. The EC2 bootstrap retrieves the secret through its instance profile, initializes `db/schema.sql`, and runs the API as a systemd service. It never stores a database password in Git.
-
-Terraform also provisions the EC2 key pair: `tls_private_key` generates the RSA key and `aws_key_pair` registers the public half. The private half only lives in the remote state, so read it once and keep it outside the repository:
+### Tests
 
 ```bash
-cd infra
-terraform output -raw ssh_private_key_pem > key.pem
-chmod 600 key.pem
+npm test        # node --test
 ```
 
-`ssh_cidr` has no default on purpose. The deploy workflow connects from GitHub-hosted runners, whose addresses change, so allow `0.0.0.0/0` if you rely on that automation, or your own address if you only need manual shell access.
+Three suites run without a database or AWS access, because every external dependency is injected:
 
-> Losing the remote state loses that private key, and Terraform would create a different key pair on the next apply.
+- `test/app.test.js` — routes, validation, health reporting and the metric counters the handlers emit.
+- `test/metrics.test.js` — the durable counter file, including the reset that the CloudWatch publisher performs between runs.
+- `test/secrets.test.js` — resolution from Secrets Manager, and the environment fallback.
+
+## Infrastructure
+
+Terraform lives in [`infra/`](infra) and requires **Terraform 1.10 or newer**.
 
 ```bash
 cd infra
 cp terraform.tfvars.example terraform.tfvars
-# Edit terraform.tfvars with the lab region, AMI, repository URL, existing instance profile,
-# alert email, and the CIDR allowed to reach port 22. Terraform creates the key pair.
-terraform init -backend-config="bucket=YOUR_PREEXISTING_STATE_BUCKET" -backend-config="key=to-do-list-api/terraform.tfstate" -backend-config="region=us-east-1"
-terraform fmt -recursive
+# Fill in the lab region, AMI, repository URL, existing instance profile,
+# the alert email and the CIDR allowed to reach port 22.
+terraform init -backend-config="bucket=YOUR_PREEXISTING_STATE_BUCKET" \
+               -backend-config="key=to-do-list-api/terraform.tfstate" \
+               -backend-config="region=us-east-1"
+terraform fmt -check -recursive
 terraform validate
 terraform plan
 terraform apply
 terraform output api_url
-# After validation:
-terraform destroy
 ```
 
-The S3 backend bucket must already exist and be permitted by the lab role; Terraform does not create it. Encryption and state locking are declared in `infra/versions.tf` (`encrypt = true`, `use_lockfile = true`), so every run locks the state through S3 itself and requires Terraform 1.10 or newer. Do not commit `terraform.tfstate`, `.terraform/`, or `terraform.tfvars`. The root and `infra/.gitignore` files exclude them.
+`terraform destroy` removes everything this configuration created.
 
-## GitHub Actions
+### Remote state
 
-- `test.yml`: runs the unit test suite for every pull request.
-- `terraform-apply.yml`: manual provisioning workflow using the `infrastructure` environment.
-- `terraform-destroy.yml`: manual cleanup workflow.
-- `release.yml`: for tags matching `v*.*.*`, packages the repository with `git archive` and attaches the zip to a GitHub release.
-- `deploy.yml`: on a published release, copies [`scripts/deploy-release.sh`](scripts/deploy-release.sh) to EC2, which downloads the release asset, installs it, records the tag as `APP_VERSION` and restarts the systemd service until `/version` reports the new version.
-- `health-monitor.yml`: checks `${API_URL}/health` every five minutes, opens or updates an issue titled `[health-check-alert]` when it fails, and closes that issue after a passing run.
+The state lives in S3 and never in the repository. `infra/versions.tf` declares `encrypt = true` and `use_lockfile = true`, so every run encrypts the object and takes an S3-native lock; no DynamoDB table is needed. The bucket must already exist and be permitted by the lab role, because Terraform does not create it. `*.tfstate`, `.terraform/` and `terraform.tfvars` are ignored by both root and `infra/` `.gitignore` files.
 
-Configure these repository/environment values before using workflows:
+### Key pair
 
-- Secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, optional `AWS_SESSION_TOKEN`, `EC2_SSH_PRIVATE_KEY`, and `EC2_HOST`.
-- Variables: `AWS_REGION`, `API_URL`, `TF_STATE_BUCKET`, `AMI_ID`, `INSTANCE_PROFILE_NAME`, `SSH_CIDR`, and `ALERT_EMAIL`.
-- `terraform-apply.yml` and `terraform-destroy.yml` generate a temporary variables file and use the shared S3 backend; the state is never committed. The backend bucket must be provisioned separately because the learned-lab role may not permit Terraform to create it.
+Terraform provisions the EC2 key pair: `tls_private_key` generates a 4096-bit RSA key and `aws_key_pair` registers the public half. The private half lives only in the remote state, so read it once and keep it outside the repository:
 
-### Required status check
+```bash
+terraform output -raw ssh_private_key_pem > ~/donelist-key.pem
+chmod 600 ~/donelist-key.pem
+```
 
-The grading checklist requires a failing CI run to block merges into `main`. That is a repository setting, so it has to be applied once by hand:
+Losing the remote state loses that key, and the next apply creates a different key pair.
 
-1. Open any pull request so the `Tests` workflow runs at least once; a check name only becomes selectable after its first run.
-2. Go to **Settings → Branches → Add branch protection rule** (or edit the existing rule for `main`).
+### Variables
+
+| Variable | Purpose |
+| --- | --- |
+| `repository_url` | Public repository cloned by EC2 user data. |
+| `ami_id` | Amazon Linux 2023 AMI for the region. |
+| `instance_profile_name` | Existing EC2 instance profile; Terraform creates no IAM role. |
+| `ssh_cidr` | CIDR allowed to reach port 22. No default, validated. |
+| `alert_email` | Address subscribed to the alarm topic. |
+| `instance_role_name` | Optional. When set, Terraform attaches an inline `cloudwatch:PutMetricData` policy to that existing role. |
+| `database_connections_threshold` | Connection count that trips the native RDS alarm. Defaults to 20. |
+| `app_version`, `app_port`, `db_name`, `db_username`, `db_instance_class`, `instance_type`, `aws_region`, `project_name` | Sizing and naming. |
+
+The configuration deliberately creates no IAM role, because the learned lab allows a single existing role. If that role cannot be assumed by EC2, the lab must provide an instance profile; Terraform cannot safely convert an arbitrary role without creating IAM resources.
+
+## Continuous integration
+
+`.github/workflows/test.yml` runs `npm ci` and `npm test` for every pull request, with least-privilege permissions and superseded runs cancelled. The grading checklist requires a failing run to block merges into `main`; that is a repository setting, so apply it once by hand:
+
+1. Open any pull request so the `Tests` workflow runs at least once (a check name only becomes selectable after its first run).
+2. **Settings → Branches → Add branch protection rule** for `main`.
 3. Enable **Require status checks to pass before merging** and select `Tests / Unit tests`.
-4. Leave the workflow name `Tests` and the job name `Unit tests` untouched: the required check matches on both.
+4. Keep the workflow name `Tests` and the job name `Unit tests`: the required check matches both.
 
-The job runs `npm test`, which executes the suites in `test/app.test.js`, `test/metrics.test.js` and `test/secrets.test.js`; it uses `npm ci`, so `package-lock.json` must stay committed.
+## Release and deployment
+
+1. `release.yml` runs on a tag matching `v*.*.*`. It packages the tagged commit with `git archive`, verifies that the archive is readable and contains `package.json`, and attaches the zip to a GitHub release.
+2. `deploy.yml` runs when a release is published. It copies [`scripts/deploy-release.sh`](scripts/deploy-release.sh) to the instance over SSH and runs it with the tag and the asset URL. The script downloads the asset, extracts it over `/opt/to-do-list-api`, runs `npm ci --omit=dev`, records the tag as `APP_VERSION` in `/etc/to-do-list-api.env`, restarts the systemd unit and polls `/version` until the instance reports the new tag.
+
+The instance therefore deploys the exact artifact a reviewer can download from the release page, and never builds from git at deploy time. Deployment is not performed with `scp`.
+
+Because the runners' egress addresses change, `ssh_cidr` must allow the GitHub-hosted runner ranges (or `0.0.0.0/0`) for the deploy job to reach port 22.
+
+## Observability
+
+The API keeps three counters in `/var/lib/to-do-list-api/metrics.json`. A systemd timer runs `observability/publish_metrics.py` once a minute; that script claims the file (renames it) and publishes the deltas with boto3 `put_metric_data` to the `ToDoListApi` namespace, so each datapoint covers only the events since the previous publish.
+
+| Metric | Namespace | Source | Alarm |
+| --- | --- | --- | --- |
+| `DatabaseConnections` | `AWS/RDS` | Native AWS metric | `Maximum > 20` for 3 minutes |
+| `DbReadErrors` | `ToDoListApi` | API counter, published with boto3 | `Sum > 3` in 2 minutes |
+| `DbWriteErrors` | `ToDoListApi` | API counter, published with boto3 | `Sum > 3` in 2 minutes |
+| `TasksCreated` | `ToDoListApi` | Proposed behaviour metric: task intake | `Sum > 50` in 5 minutes |
+
+Every alarm notifies the `${project_name}-alerts` SNS topic, which has an email subscription to `alert_email`. **Confirm the subscription from the inbox before relying on notifications**; SNS keeps it pending until then.
+
+The dashboard `${project_name}-api` shows the three metric widgets and the alarm state. `.github/workflows/health-monitor.yml` polls `$API_URL/health` every five minutes, opens or updates an issue titled `[health-check-alert]` when it fails, and closes that issue after the API recovers.
+
+If `instance_role_name` is left empty, the EC2 role must already allow `cloudwatch:PutMetricData`, otherwise the publisher logs `AccessDenied` and no custom metric appears.
+
+## Demo and evidence
+
+Suggested order for the recording and the report screenshots:
+
+1. Run `terraform apply` and open the state object in S3 to show the remote backend.
+2. Show `terraform output api_url`, then `curl $API_URL/version` and `POST`/`GET /tasks`.
+3. Open the CloudWatch dashboard with the three metrics populated.
+4. Push a commit, open a pull request and show `Tests / Unit tests` blocking the merge.
+5. Tag `v1.0.1`, wait for the release, download the zip from the release page, then show the deploy run and `curl $API_URL/version` returning the new tag.
+6. Lower an alarm threshold temporarily (or stop the RDS instance for `DbReadErrors`) so the alarm goes to `ALARM` and the email arrives.
+
+## Repository layout
+
+```
+src/            Express app, PostgreSQL pool, Secrets Manager resolution, counters
+test/           node:test suites
+db/             schema.sql
+infra/          Terraform: EC2, RDS, secrets, SNS, alarms, dashboard, user data
+observability/  boto3 publisher for the CloudWatch counters
+scripts/        deploy-release.sh, used by the deploy workflow
+.github/        CI, Terraform apply/destroy, release, deploy and health workflows
+```
+
+## Repository and environment configuration
+
+- Secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, optional `AWS_SESSION_TOKEN`, `EC2_SSH_PRIVATE_KEY`, `EC2_HOST`.
+- Variables: `AWS_REGION`, `API_URL`, `TF_STATE_BUCKET`, `AMI_ID`, `INSTANCE_PROFILE_NAME`, `SSH_CIDR`, `ALERT_EMAIL`.
+- `terraform-apply.yml` and `terraform-destroy.yml` generate a temporary `terraform.auto.tfvars.json` and share the same S3 backend; the state is never committed.
