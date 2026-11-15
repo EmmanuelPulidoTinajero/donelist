@@ -21,11 +21,11 @@ Tracked closure of Práctica 4 grading checklist. Read through `## Log` before a
 ## Tasks
 
 - T1 [S3,S8,S12] App reads the RDS secret from Secrets Manager at runtime; custom CloudWatch metrics published (RDS read/write errors + proposed behavior metric); Terraform SNS topic, email subscription and the two custom alarms; native AWS metric identified and alarmed. Commit: 5702123.
-- T2 [S9] CloudWatch dashboard definition plus Terraform dashboard resource; health-monitor keeps the 5-minute schedule and gains a notification path. Commit: pending.
-- T3 [S7,S11] Release workflow packages the repository as a zip asset; deploy workflow downloads that asset, refreshes `APP_VERSION` and restarts the service so `/version` advances. Commit: pending.
-- T4 [S6] Committed `package-lock.json` so `npm ci` works, plus README instructions for the required status check on `main`. Commit: pending.
-- T5 [S2] `aws_key_pair` managed by Terraform; remote backend with encryption and state locking documented; SSH ingress narrowed. Commit: pending.
-- T6 [S4,S5,S10] Preserve provision/destroy/CI/user_data behavior while the above land; no SSH or scp step introduced. Commit: pending.
+- T2 [S9] CloudWatch dashboard definition plus Terraform dashboard resource; health-monitor keeps the 5-minute schedule and gains a notification path. Commit: 719411d.
+- T3 [S7,S11] Release workflow packages the repository as a zip asset; deploy workflow downloads that asset, refreshes `APP_VERSION` and restarts the service so `/version` advances. Commit: 4f89383.
+- T4 [S6] Committed `package-lock.json` so `npm ci` works, plus README instructions for the required status check on `main`. Commit: d7fa086 (lockfile landed with T1).
+- T5 [S2] `aws_key_pair` managed by Terraform; remote backend with encryption and state locking documented; SSH ingress requires an explicit CIDR. Commit: 7a4c9eb.
+- T6 [S4,S5,S10] Preserve provision/destroy/CI/user_data behavior while the above land; no SSH or scp step introduced. Commit: verified on 7a4c9eb.
 - T7 [S1,S13] README rewrite (run, provision, destroy, observability, evidence/screenshots, demo steps) and report draft with the three reflection answers and the architecture diagram. Commit: pending.
 
 ## Delivery slices
@@ -34,7 +34,8 @@ Branch `feature/todo-list-terraform-rds`. Review slices stay near ~400 authored 
 
 - Slice 1 — closed: task API and base infrastructure, `bd5edf4`..`5c4850f`.
 - Slice 2 — closed: T1, runtime credentials plus the three metrics and their alarms, `611680a` and `5702123`. 688 authored lines excluding the lock file.
-- Slice 3 — open: T2 to T7.
+- Slice 3 — closed: the observability dashboard, the artifact-based release/deploy flow, the CI documented check, the Terraform-managed key pair and the remote-state hardening, `719411d`, `4f89383`, `d7fa086`, `7a4c9eb`.
+- Slice 4 — open: T7, the README and the report.
 
 ## Log
 
@@ -43,3 +44,4 @@ Branch `feature/todo-list-terraform-rds`. Review slices stay near ~400 authored 
 - L3: Read-only audit of the repository against the seven checklist items mapped as S1-S13; gaps recorded in T1-T7. Audit evidence: `src/app.js:13-52` endpoints OK, `infra/main.tf:110-130` EC2, `infra/versions.tf:4` `backend "s3" {}` without encrypt/locking, `infra/main.tf:115` `key_name = var.ssh_key_name` with no `aws_key_pair`, `infra/user_data.sh.tftpl:19` secret read by AWS CLI at boot, `test/app.test.js` 6 tests with `.github/workflows/test.yml:13` `npm ci` and no lockfile, `.github/workflows/release.yml:16` release without `files:`, `.github/workflows/deploy.yml:25` SSH `git checkout` instead of a release asset, no CloudWatch/SNS/alarm/dashboard artifacts anywhere.
 - L4: User decision on ordering: "Todo en orden del checklist" — 8 → 7 → 6 → 2 → 3 → README, one verifiable commit per block.
 - L5: T1 closed in `5702123` plus the line-ending chore `611680a`. Evidence: `node --test` 18/18 green (10 in `test/app.test.js`, 5 new in `test/metrics.test.js`, 2 in `test/secrets.test.js`); `terraform fmt -check -recursive` and `terraform validate` clean; `observability/publish_metrics.py --dry-run` prints the `put_metric_data` payload for namespace `ToDoListApi`. Defect found and fixed before committing: `createFileMetrics` kept cumulative counters in process memory, so after the publisher claimed the counters file the next increment republished the historical total and the `TasksCreated` alarm would sit in ALARM forever; the file is now the source of truth (read-modify-write) and `test/metrics.test.js` reproduces the case in red against the previous implementation. `package-lock.json` landed in T1 because the new dependency requires it, which closes that part of T4. Recorded deployment risk: `instance_role_name` defaults to empty, so the lab role needs `cloudwatch:PutMetricData` or the publisher fails with AccessDenied.
+- L6: T2 to T6 closed. Evidence: the dashboard template renders as JSON with 4 widgets, 3 of them metric widgets (`json.loads` over `infra/dashboard.json.tftpl` with placeholder substitution); every workflow file parses as YAML and the generated `terraform.auto.tfvars.json` shape carries `ssh_cidr` and `alert_email`; `scripts/deploy-release.sh` passes `bash -n` and an end-to-end harness run with stubbed `curl`/`npm`/`sudo`/`systemctl`/`python3` installed the payload over `APP_DIR`, rewrote `APP_VERSION`, restarted the unit, matched `/version` and rejected a missing tag, a malformed tag and a foreign asset URL; `git archive` packaging produced 43 entries including `package.json` and `src/server.js`; a full `terraform plan` in a scratch copy with the backend block stripped and local state returned `17 to add`, with the expected alarm names, `key_pair_name` and `dashboard_name`. Two defects found on the way: `alert_email` had become a required variable that neither Terraform workflow passed, so destroy would have failed, and `ssh_cidr` defaulted to `0.0.0.0/0`. Deploy still uses the existing SSH secrets because the runners' egress addresses vary, so `ssh_cidr` must allow them or the deploy job cannot reach port 22.
