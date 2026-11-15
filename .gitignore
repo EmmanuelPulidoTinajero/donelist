@@ -52,3 +52,6 @@ tfplan
 
 # Local agent tooling state (model routing, session artifacts)
 .pi/
+# Python artifacts from the publisher tests
+__pycache__/
+*.pyc

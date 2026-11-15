@@ -30,25 +30,63 @@ def read_counters(path):
 
 
 def claim_counters(path):
-    """Move the counter file aside before reading it.
+    """Move the counter file aside and return ``(counters, claimed_path)``.
 
     Renaming first means a counter the API writes during this run lands in a
-    fresh file instead of being overwritten when the counters are reset.
+    fresh file instead of being overwritten when the counters are reset. The
+    claimed file is kept until the publish succeeds: a failed
+    ``put_metric_data`` must not destroy the interval's datapoints, because the
+    RDS error alarms depend on them.
     """
     if not os.path.exists(path):
-        return None
+        return None, None
     claimed = f"{path}.{int(time.time() * 1000)}.claimed"
     try:
         os.rename(path, claimed)
     except FileNotFoundError:
-        return None
+        return None, None
+    counters = read_counters(claimed)
+    if not counters:
+        release_claim(claimed)
+        return None, None
+    return counters, claimed
+
+
+def release_claim(claimed_path):
+    """Drop a claimed counter file that was published or is unusable."""
+    if not claimed_path:
+        return
     try:
-        return read_counters(claimed)
-    finally:
-        try:
-            os.unlink(claimed)
-        except OSError:
-            pass
+        os.unlink(claimed_path)
+    except OSError:
+        pass
+
+
+def write_counters(path, counters):
+    """Write counters atomically so a reader never sees a partial file."""
+    temporary = f"{path}.{os.getpid()}.tmp"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        json.dump(counters, handle, sort_keys=True)
+    os.replace(temporary, path)
+
+
+def restore_counters(claimed_path, path):
+    """Merge a failed claim back into the live file so the next run retries it.
+
+    Increments the API wrote while the publish was failing are added on top, so
+    no datapoint is lost and none is counted twice.
+    """
+    claimed = read_counters(claimed_path) or {}
+    merged = dict(read_counters(path) or {})
+    for name, value in claimed.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        previous = merged.get(name, 0)
+        if isinstance(previous, bool) or not isinstance(previous, (int, float)):
+            previous = 0
+        merged[name] = previous + value
+    write_counters(path, merged)
+    release_claim(claimed_path)
 
 
 def build_metric_data(counters):
@@ -83,7 +121,10 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
 
-    counters = read_counters(args.file) if args.dry_run else claim_counters(args.file)
+    if args.dry_run:
+        counters, claimed_path = read_counters(args.file), None
+    else:
+        counters, claimed_path = claim_counters(args.file)
     if not counters:
         print(f"No counters at {args.file}; nothing to publish")
         return 0
@@ -98,7 +139,16 @@ def main(argv=None):
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
 
-    publish(metric_data, args.namespace, args.region)
+    try:
+        publish(metric_data, args.namespace, args.region)
+    except Exception:
+        try:
+            restore_counters(claimed_path, args.file)
+        except OSError as error:
+            print(f"Could not restore counters from {claimed_path}: {error}", file=sys.stderr)
+        print(f"Publish failed; counters kept in {args.file} for the next run", file=sys.stderr)
+        raise
+    release_claim(claimed_path)
     print(f"Published {len(metric_data)} metrics to {args.namespace}")
     return 0
 

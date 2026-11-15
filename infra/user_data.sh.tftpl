@@ -1,6 +1,10 @@
 #!/bin/bash
-set -euxo pipefail
+# No `set -x` here: the trace would expand the secret payload and the database
+# password into /var/log/cloud-init-output.log and the serial console, which
+# defeats reading them from Secrets Manager. Progress is logged with echo lines.
+set -euo pipefail
 
+echo 'Installing packages'
 dnf update -y
 dnf install -y git nodejs awscli postgresql15 python3 python3-pip
 
@@ -15,9 +19,11 @@ fi
 
 cd /opt/to-do-list-api
 npm ci --omit=dev
+echo 'Application dependencies installed'
 
 # The schema bootstrap needs the credentials once; the service itself resolves
 # them from Secrets Manager at runtime through DB_SECRET_ARN.
+echo 'Reading the database credentials from Secrets Manager'
 SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id '${secret_arn}' --query SecretString --output text --region '${aws_region}')
 DB_HOST=$(printf '%s' "$SECRET_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["host"])')
 DB_PORT=$(printf '%s' "$SECRET_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["port"])')
@@ -26,6 +32,7 @@ DB_USER=$(printf '%s' "$SECRET_JSON" | python3 -c 'import json,sys; print(json.l
 DB_PASSWORD=$(printf '%s' "$SECRET_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["password"])')
 
 for attempt in $(seq 1 30); do
+  echo "Applying db/schema.sql (attempt $attempt of 30)"
   if PGPASSWORD="$DB_PASSWORD" psql "host=$DB_HOST port=$DB_PORT dbname=$DB_NAME user=$DB_USER sslmode=require" -f db/schema.sql; then
     break
   fi
