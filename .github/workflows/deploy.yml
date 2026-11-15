@@ -12,14 +12,24 @@ jobs:
     runs-on: ubuntu-latest
     environment: infrastructure
     steps:
+      - uses: actions/checkout@v4
+
       - name: Install SSH key
         run: |
           install -m 700 -d ~/.ssh
           printf '%s\n' '${{ secrets.EC2_SSH_PRIVATE_KEY }}' > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H '${{ secrets.EC2_HOST }}' >> ~/.ssh/known_hosts
-      - name: Pull and restart release
+
+      # The instance never builds from git: it receives the zip attached to the
+      # release, so the deployed artifact is the one a reviewer can download.
+      - name: Download the release asset on the instance and restart the API
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
+          ASSET_URL: ${{ github.event.release.assets[0].browser_download_url }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
         run: |
-          ssh ec2-user@'${{ secrets.EC2_HOST }}' "cd /opt/to-do-list-api && git fetch --tags origin && git checkout \"$RELEASE_TAG\" && npm ci --omit=dev && sudo systemctl restart to-do-list-api"
+          test -n "$RELEASE_TAG"
+          test -n "$ASSET_URL"
+          test -n "$EC2_HOST"
+          ssh ec2-user@"$EC2_HOST" "bash -s -- '$RELEASE_TAG' '$ASSET_URL'" < scripts/deploy-release.sh
