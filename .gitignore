@@ -45,3 +45,10 @@ terraform.rc
 # Optional: ignore plan files saved before destroying Terraform configuration
 # Uncomment the line below if you want to ignore planout files.
 # planout
+
+# Saved plan files produced by `terraform plan -out=tfplan`
+tfplan
+*.tfplan
+
+# Local agent tooling state (model routing, session artifacts)
+.pi/
