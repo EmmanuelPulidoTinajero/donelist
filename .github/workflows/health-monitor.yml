@@ -10,6 +10,9 @@ permissions: {}
 jobs:
   health:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
     steps:
       - name: Check API health
         env:
@@ -17,3 +20,34 @@ jobs:
         run: |
           test -n "$API_URL"
           curl --fail --show-error --silent --retry 2 --retry-delay 5 "$API_URL/health"
+
+      # The scheduled run is the only monitoring this project has without a
+      # human watching CloudWatch, so a failure has to leave a trace.
+      - name: Open or update the outage issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          API_URL: ${{ vars.API_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title='[health-check-alert] API health check failing'
+          body=$(printf 'The 5-minute health check failed.\n\nAPI: %s\nRun: %s\n' "$API_URL" "$RUN_URL")
+          existing=$(gh issue list --state open --search '"[health-check-alert]" in:title' \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
+
+      - name: Close the outage issue after recovery
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          existing=$(gh issue list --state open --search '"[health-check-alert]" in:title' \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue close "$existing" --comment "The health check passed again. Run: $RUN_URL"
+          fi

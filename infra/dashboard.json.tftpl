@@ -1,0 +1,106 @@
+{
+  "widgets": [
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 0,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "RDS connections in use (native AWS/RDS metric)",
+        "region": "${region}",
+        "view": "timeSeries",
+        "stacked": false,
+        "stat": "Maximum",
+        "period": 60,
+        "metrics": [
+          ["AWS/RDS", "DatabaseConnections", "DBInstanceIdentifier", "${db_instance}"]
+        ],
+        "annotations": {
+          "horizontal": [
+            {
+              "label": "Alarm threshold",
+              "value": "${connections_threshold}"
+            }
+          ],
+          "alarms": ["${native_alarm}"]
+        },
+        "yAxis": {
+          "left": {
+            "min": 0,
+            "label": "Connections"
+          }
+        }
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12,
+      "y": 0,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "RDS read and write errors reported by the API (boto3)",
+        "region": "${region}",
+        "view": "timeSeries",
+        "stacked": false,
+        "stat": "Sum",
+        "period": 60,
+        "metrics": [
+          ["ToDoListApi", "DbReadErrors", { "label": "Failed reads" }],
+          [".", "DbWriteErrors", { "label": "Failed writes" }]
+        ],
+        "annotations": {
+          "alarms": ["${read_errors_alarm}", "${write_errors_alarm}"]
+        },
+        "yAxis": {
+          "left": {
+            "min": 0,
+            "label": "Errors"
+          }
+        }
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 6,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "Tasks created (proposed behavior metric)",
+        "region": "${region}",
+        "view": "timeSeries",
+        "stacked": false,
+        "stat": "Sum",
+        "period": 300,
+        "metrics": [["ToDoListApi", "TasksCreated"]],
+        "annotations": {
+          "alarms": ["${tasks_created_alarm}"]
+        },
+        "yAxis": {
+          "left": {
+            "min": 0,
+            "label": "Tasks"
+          }
+        }
+      }
+    },
+    {
+      "type": "alarm",
+      "x": 12,
+      "y": 6,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "Alarm state",
+        "alarms": [
+          "${native_alarm}",
+          "${read_errors_alarm}",
+          "${write_errors_alarm}",
+          "${tasks_created_alarm}"
+        ]
+      }
+    }
+  ]
+}

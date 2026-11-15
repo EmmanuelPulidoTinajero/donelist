@@ -30,3 +30,8 @@ output "alarm_names" {
   ]
   description = "CloudWatch alarms created, one per published metric."
 }
+
+output "dashboard_name" {
+  value       = aws_cloudwatch_dashboard.api.dashboard_name
+  description = "CloudWatch dashboard rendering the three instrumented metrics."
+}
