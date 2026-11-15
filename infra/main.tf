@@ -29,9 +29,13 @@ data "aws_subnet" "app" {
   id = data.aws_subnets.default.ids[0]
 }
 
+# RDS rejects '/', '@', '"' and space in MasterUserPassword, so the alphabet is
+# restricted to characters it accepts. Keeping the special set explicit avoids
+# an apply that fails only once the database creation is attempted.
 resource "random_password" "db" {
-  length  = 32
-  special = true
+  length           = 32
+  special          = true
+  override_special = "!#$%&*()-_=+[]{}<>:?"
 }
 
 resource "aws_security_group" "app" {
@@ -134,11 +138,12 @@ resource "aws_instance" "app" {
   user_data_replace_on_change = true
 
   user_data = templatefile("${path.module}/user_data.sh.tftpl", {
-    repository_url = var.repository_url
-    secret_arn     = aws_secretsmanager_secret.db.arn
-    aws_region     = var.aws_region
-    app_version    = var.app_version
-    app_port       = var.app_port
+    repository_url    = var.repository_url
+    repository_branch = var.repository_branch
+    secret_arn        = aws_secretsmanager_secret.db.arn
+    aws_region        = var.aws_region
+    app_version       = var.app_version
+    app_port          = var.app_port
   })
 
   tags = {

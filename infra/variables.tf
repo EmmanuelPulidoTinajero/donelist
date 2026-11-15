@@ -15,6 +15,12 @@ variable "repository_url" {
   type        = string
 }
 
+variable "repository_branch" {
+  description = "Branch cloned by EC2 user_data. Defaults to main; point it at another branch while that work is not merged yet."
+  type        = string
+  default     = "main"
+}
+
 variable "instance_profile_name" {
   description = "Existing EC2 instance profile backed by the lab's single allowed IAM role. Terraform does not create IAM roles."
   type        = string

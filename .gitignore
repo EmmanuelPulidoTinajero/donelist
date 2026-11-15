@@ -49,6 +49,7 @@ terraform.rc
 # Saved plan files produced by `terraform plan -out=tfplan`
 tfplan
 *.tfplan
+tfplan.*
 
 # Local agent tooling state (model routing, session artifacts)
 .pi/

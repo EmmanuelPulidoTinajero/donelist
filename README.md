@@ -57,6 +57,8 @@ terraform output api_url
 
 `terraform destroy` removes everything this configuration created.
 
+The database password comes from `random_password` and is restricted to the character set RDS accepts: `/`, `@`, `"` and space are excluded, because RDS rejects them in `MasterUserPassword` and the apply would fail only once the instance creation starts.
+
 ### Remote state
 
 The state lives in S3 and never in the repository. `infra/versions.tf` declares `encrypt = true` and `use_lockfile = true`, so every run encrypts the object and takes an S3-native lock; no DynamoDB table is needed. The bucket must already exist and be permitted by the lab role, because Terraform does not create it. `*.tfstate`, `.terraform/` and `terraform.tfvars` are ignored by both root and `infra/` `.gitignore` files.
@@ -77,6 +79,7 @@ Losing the remote state loses that key, and the next apply creates a different k
 | Variable | Purpose |
 | --- | --- |
 | `repository_url` | Public repository cloned by EC2 user data. |
+| `repository_branch` | Branch cloned by user data. Defaults to `main`; set it to the feature branch while that work is not merged yet. |
 | `ami_id` | Amazon Linux 2023 AMI for the region. |
 | `instance_profile_name` | Existing EC2 instance profile; Terraform creates no IAM role. |
 | `ssh_cidr` | CIDR allowed to reach port 22. No default, validated. |
