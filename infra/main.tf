@@ -2,6 +2,22 @@ data "aws_vpc" "default" {
   default = true
 }
 
+# The key pair is provisioned by Terraform: the private half stays in state and
+# is exposed only through the sensitive ssh_private_key_pem output.
+resource "tls_private_key" "ssh" {
+  algorithm = "RSA"
+  rsa_bits  = 4096
+}
+
+resource "aws_key_pair" "app" {
+  key_name   = "${var.project_name}-key"
+  public_key = tls_private_key.ssh.public_key_openssh
+
+  tags = {
+    Name = "${var.project_name}-key"
+  }
+}
+
 data "aws_subnets" "default" {
   filter {
     name   = "vpc-id"
@@ -112,7 +128,7 @@ resource "aws_instance" "app" {
   instance_type               = var.instance_type
   subnet_id                   = data.aws_subnet.app.id
   vpc_security_group_ids      = [aws_security_group.app.id]
-  key_name                    = var.ssh_key_name
+  key_name                    = aws_key_pair.app.key_name
   iam_instance_profile        = var.instance_profile_name
   associate_public_ip_address = true
   user_data_replace_on_change = true

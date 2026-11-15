@@ -31,15 +31,14 @@ variable "instance_type" {
   default     = "t2.micro"
 }
 
-variable "ssh_key_name" {
-  description = "Existing EC2 key pair name."
-  type        = string
-}
-
 variable "ssh_cidr" {
-  description = "CIDR allowed to SSH to EC2."
+  description = "CIDR allowed to SSH to EC2. Required, with no default: the deploy workflow connects from GitHub-hosted runners, so allow those ranges or the addresses you actually use."
   type        = string
-  default     = "0.0.0.0/0"
+
+  validation {
+    condition     = can(cidrhost(var.ssh_cidr, 0))
+    error_message = "ssh_cidr must be a valid CIDR block, such as 203.0.113.10/32."
+  }
 }
 
 variable "app_port" {

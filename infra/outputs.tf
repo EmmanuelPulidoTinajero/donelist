@@ -35,3 +35,14 @@ output "dashboard_name" {
   value       = aws_cloudwatch_dashboard.api.dashboard_name
   description = "CloudWatch dashboard rendering the three instrumented metrics."
 }
+
+output "key_pair_name" {
+  value       = aws_key_pair.app.key_name
+  description = "EC2 key pair created by Terraform."
+}
+
+output "ssh_private_key_pem" {
+  value       = tls_private_key.ssh.private_key_pem
+  description = "Private key matching the generated key pair. Read it with: terraform output -raw ssh_private_key_pem > key.pem"
+  sensitive   = true
+}

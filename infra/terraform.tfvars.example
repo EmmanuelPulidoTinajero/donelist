@@ -1,7 +1,6 @@
 aws_region            = "us-east-1"
 repository_url        = "https://github.com/EmmanuelPulidoTinajero/donelist.git"
 ami_id                = "ami-xxxxxxxxxxxxxxxxx"
-ssh_key_name          = "your-existing-key-pair"
 instance_profile_name = "your-existing-ec2-instance-profile"
 ssh_cidr              = "YOUR.PUBLIC.IP/32"
 alert_email           = "your-email@example.com"
