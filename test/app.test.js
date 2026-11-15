@@ -7,6 +7,17 @@ function createPool({ query }) {
   return { query };
 }
 
+function createMetrics() {
+  const increments = [];
+  return {
+    increments,
+    increment(name, amount = 1) {
+      increments.push({ name, amount });
+    },
+    snapshot: () => ({})
+  };
+}
+
 test('GET /tasks returns persisted tasks', async () => {
   const pool = createPool({ query: async () => ({ rows: [{ id: 1, title: 'Study', completed: false }] }) });
   const response = await request(createApp({ pool })).get('/tasks');
@@ -60,4 +71,44 @@ test('GET /health reports FAIL when the database is unavailable', async () => {
   const response = await request(createApp({ pool, now: () => fixedDate })).get('/health');
   assert.equal(response.status, 503);
   assert.deepEqual(response.body, { status: 'FAIL', version: '1.0.0', timestamp: fixedDate.toISOString() });
+});
+
+test('GET /tasks counts a database read error', async () => {
+  const metrics = createMetrics();
+  const pool = createPool({ query: async () => { throw new Error('offline'); } });
+  const response = await request(createApp({ pool, metrics })).get('/tasks');
+  assert.equal(response.status, 500);
+  assert.deepEqual(metrics.increments, [{ name: 'DbReadErrors', amount: 1 }]);
+});
+
+test('GET /tasks counts nothing when the read succeeds', async () => {
+  const metrics = createMetrics();
+  const pool = createPool({ query: async () => ({ rows: [] }) });
+  const response = await request(createApp({ pool, metrics })).get('/tasks');
+  assert.equal(response.status, 200);
+  assert.deepEqual(metrics.increments, []);
+});
+
+test('POST /tasks counts a database write error', async () => {
+  const metrics = createMetrics();
+  const pool = createPool({ query: async () => { throw new Error('offline'); } });
+  const response = await request(createApp({ pool, metrics })).post('/tasks').send({ title: 'Ship' });
+  assert.equal(response.status, 500);
+  assert.deepEqual(metrics.increments, [{ name: 'DbWriteErrors', amount: 1 }]);
+});
+
+test('POST /tasks counts a created task', async () => {
+  const metrics = createMetrics();
+  const pool = createPool({ query: async () => ({ rows: [{ id: 3, title: 'Ship', completed: false }] }) });
+  const response = await request(createApp({ pool, metrics })).post('/tasks').send({ title: 'Ship' });
+  assert.equal(response.status, 201);
+  assert.deepEqual(metrics.increments, [{ name: 'TasksCreated', amount: 1 }]);
+});
+
+test('GET /health counts a database read error', async () => {
+  const metrics = createMetrics();
+  const pool = createPool({ query: async () => { throw new Error('offline'); } });
+  const response = await request(createApp({ pool, metrics })).get('/health');
+  assert.equal(response.status, 503);
+  assert.deepEqual(metrics.increments, [{ name: 'DbReadErrors', amount: 1 }]);
 });

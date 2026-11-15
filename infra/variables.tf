@@ -67,3 +67,20 @@ variable "app_version" {
   type    = string
   default = "1.0.0"
 }
+
+variable "alert_email" {
+  description = "Email address subscribed to the SNS topic wired to every CloudWatch alarm."
+  type        = string
+}
+
+variable "instance_role_name" {
+  description = "Existing IAM role behind the EC2 instance profile. When set, Terraform attaches an inline policy granting cloudwatch:PutMetricData; Terraform still creates no IAM role."
+  type        = string
+  default     = ""
+}
+
+variable "database_connections_threshold" {
+  description = "Simultaneous connections before the native AWS/RDS DatabaseConnections alarm fires."
+  type        = number
+  default     = 20
+}

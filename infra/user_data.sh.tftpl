@@ -2,7 +2,7 @@
 set -euxo pipefail
 
 dnf update -y
-dnf install -y git nodejs awscli postgresql15 python3
+dnf install -y git nodejs awscli postgresql15 python3 python3-pip
 
 mkdir -p /opt/to-do-list-api
 if [ -d /opt/to-do-list-api/.git ]; then
@@ -16,15 +16,14 @@ fi
 cd /opt/to-do-list-api
 npm ci --omit=dev
 
+# The schema bootstrap needs the credentials once; the service itself resolves
+# them from Secrets Manager at runtime through DB_SECRET_ARN.
 SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id '${secret_arn}' --query SecretString --output text --region '${aws_region}')
-export DB_HOST=$(printf '%s' "$SECRET_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["host"])')
-export DB_PORT=$(printf '%s' "$SECRET_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["port"])')
-export DB_NAME=$(printf '%s' "$SECRET_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["database"])')
-export DB_USER=$(printf '%s' "$SECRET_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["username"])')
-export DB_PASSWORD=$(printf '%s' "$SECRET_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["password"])')
-export DB_SSL=true
-export APP_VERSION='${app_version}'
-export PORT='${app_port}'
+DB_HOST=$(printf '%s' "$SECRET_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["host"])')
+DB_PORT=$(printf '%s' "$SECRET_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["port"])')
+DB_NAME=$(printf '%s' "$SECRET_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["database"])')
+DB_USER=$(printf '%s' "$SECRET_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["username"])')
+DB_PASSWORD=$(printf '%s' "$SECRET_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["password"])')
 
 for attempt in $(seq 1 30); do
   if PGPASSWORD="$DB_PASSWORD" psql "host=$DB_HOST port=$DB_PORT dbname=$DB_NAME user=$DB_USER sslmode=require" -f db/schema.sql; then
@@ -37,18 +36,22 @@ for attempt in $(seq 1 30); do
   sleep 10
 done
 
-chown -R ec2-user:ec2-user /opt/to-do-list-api
+mkdir -p /var/lib/to-do-list-api
+touch /var/lib/to-do-list-api/metrics.json
+
 cat > /etc/to-do-list-api.env <<EOF
-DB_HOST=$DB_HOST
-DB_PORT=$DB_PORT
-DB_NAME=$DB_NAME
-DB_USER=$DB_USER
-DB_PASSWORD=$DB_PASSWORD
-DB_SSL=$DB_SSL
-APP_VERSION=$APP_VERSION
-PORT=$PORT
+DB_SECRET_ARN=${secret_arn}
+DB_SSL=true
+APP_VERSION=${app_version}
+PORT=${app_port}
+AWS_REGION=${aws_region}
+METRICS_FILE=/var/lib/to-do-list-api/metrics.json
 EOF
 chmod 600 /etc/to-do-list-api.env
+
+# boto3 publisher: the only component that calls put_metric_data.
+python3 -m venv /opt/to-do-list-api-metrics
+/opt/to-do-list-api-metrics/bin/pip install --quiet --upgrade pip boto3
 
 cat > /etc/systemd/system/to-do-list-api.service <<'EOF'
 [Unit]
@@ -69,5 +72,34 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
+cat > /etc/systemd/system/to-do-list-api-metrics.service <<'EOF'
+[Unit]
+Description=Publish to-do-list-api counters to CloudWatch
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ec2-user
+EnvironmentFile=/etc/to-do-list-api.env
+ExecStart=/opt/to-do-list-api-metrics/bin/python /opt/to-do-list-api/observability/publish_metrics.py
+EOF
+
+cat > /etc/systemd/system/to-do-list-api-metrics.timer <<'EOF'
+[Unit]
+Description=Publish to-do-list-api counters to CloudWatch every minute
+
+[Timer]
+OnBootSec=90
+OnUnitActiveSec=60
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target
+EOF
+
+chown -R ec2-user:ec2-user /opt/to-do-list-api /var/lib/to-do-list-api
+
 systemctl daemon-reload
 systemctl enable --now to-do-list-api
+systemctl enable --now to-do-list-api-metrics.timer
