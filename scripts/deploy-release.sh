@@ -13,9 +13,16 @@ APP_DIR="${APP_DIR:-/opt/to-do-list-api}"
 ENV_FILE="${ENV_FILE:-/etc/to-do-list-api.env}"
 SERVICE_UNIT="${SERVICE_UNIT:-to-do-list-api}"
 VERSION_URL="${VERSION_URL:-http://127.0.0.1:8000/version}"
-PYTHON_BIN="${PYTHON_BIN:-$APP_DIR/.venv/bin/python}"
+VENV_PYTHON="$APP_DIR/.venv/bin/python"
+# The archive has to be extracted with an interpreter that always exists. A
+# fresh instance whose bootstrap failed, or a previous interrupted deploy, can
+# leave the virtualenv missing or damaged, and the tool needed to repair it
+# cannot be the tool that is missing.
+SYSTEM_PYTHON="${SYSTEM_PYTHON:-python3}"
 
-# SSM Run Command executes as root; a manual run may not.
+# SSM Run Command executes as root; a manual run may not. The workflow runs this
+# script as ec2-user, so the four privileged operations below escalate on their
+# own instead of the whole script running as root over app-owned files.
 if [ "$(id -u)" -eq 0 ]; then
   SUDO=""
 else
@@ -54,7 +61,7 @@ curl --fail --silent --show-error --location --retry 3 --retry-delay 5 \
   -o "$workdir/release.zip" "$ASSET_URL"
 
 echo "Extracting the release archive"
-"$PYTHON_BIN" -m zipfile -e "$workdir/release.zip" "$workdir/out"
+"$SYSTEM_PYTHON" -m zipfile -e "$workdir/release.zip" "$workdir/out"
 
 release_dir="$(find "$workdir/out" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
 if [ -z "$release_dir" ] || [ ! -f "$release_dir/requirements.txt" ]; then
@@ -65,8 +72,13 @@ fi
 echo "Installing the release over $APP_DIR"
 mkdir -p "$APP_DIR"
 cp -a "$release_dir"/. "$APP_DIR"/
-"$PYTHON_BIN" -m pip install --quiet -r "$APP_DIR/requirements.txt"
-$SUDO chown -R "$(stat -c '%U' "$APP_DIR")": "$APP_DIR"
+
+if [ ! -x "$VENV_PYTHON" ]; then
+  echo "The virtualenv is missing or unusable; rebuilding it with $SYSTEM_PYTHON"
+  "$SYSTEM_PYTHON" -m venv "$APP_DIR/.venv"
+fi
+"$VENV_PYTHON" -m pip install --quiet --upgrade pip
+"$VENV_PYTHON" -m pip install --quiet -r "$APP_DIR/requirements.txt"
 
 echo "Recording APP_VERSION=$TAG in $ENV_FILE"
 if $SUDO grep -q '^APP_VERSION=' "$ENV_FILE"; then
@@ -80,7 +92,7 @@ $SUDO systemctl restart "$SERVICE_UNIT"
 
 served_version() {
   curl --fail --silent --show-error "$VERSION_URL" 2>/dev/null |
-    "$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin).get("version", ""))' 2>/dev/null ||
+    "$SYSTEM_PYTHON" -c 'import json,sys; print(json.load(sys.stdin).get("version", ""))' 2>/dev/null ||
     true
 }
 

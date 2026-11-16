@@ -39,11 +39,16 @@ jobs:
           if "DEPLOY_SCRIPT_EOF" in script:
               raise SystemExit("The deploy script contains the heredoc delimiter")
           command = "\n".join([
-              "set -euo pipefail",
+              # No -e here: the exit code of the remote script is what has to
+              # reach SSM, so the cleanup below has to run first.
+              "set -uo pipefail",
               "cat >/tmp/deploy-release.sh <<'DEPLOY_SCRIPT_EOF'",
               script,
               "DEPLOY_SCRIPT_EOF",
-              f"bash /tmp/deploy-release.sh '{tag}' '{asset}'",
+              "chown ec2-user:ec2-user /tmp/deploy-release.sh",
+              # Run as the service user: root must never execute code that lives
+              # in a tree the unprivileged service account can write.
+              f"runuser -u ec2-user -- bash /tmp/deploy-release.sh '{tag}' '{asset}'",
               "rc=$?",
               "rm -f /tmp/deploy-release.sh",
               "exit $rc",
@@ -72,6 +77,9 @@ jobs:
           echo "instance=$instance_id command=$command_id"
 
           status=Pending
+          # 60 x 5 s = 5 minutes. That is the budget a download plus a pip
+          # install has here; AWS-RunShellScript itself allows much longer, so a
+          # slower deploy is reported as failed while it may still finish.
           for attempt in $(seq 1 60); do
             status=$(aws ssm get-command-invocation \
               --command-id "$command_id" --instance-id "$instance_id" \

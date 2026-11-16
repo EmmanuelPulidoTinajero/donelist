@@ -173,6 +173,14 @@ resource "aws_instance" "app" {
     Name = var.project_name
   }
 
+  # The AMI is resolved by a *most_recent* data source, so a new Amazon Linux
+  # image would otherwise make every later apply plan an instance replacement:
+  # unplanned downtime and a new public IP that invalidates API_URL. Replacing
+  # the instance is a deliberate act, done by tainting or renaming it.
+  lifecycle {
+    ignore_changes = [ami]
+  }
+
   depends_on = [aws_secretsmanager_secret_version.db]
 }
 

@@ -41,8 +41,8 @@ jobs:
       - run: terraform fmt -check -recursive
       - run: terraform validate
       - run: terraform apply -auto-approve
-      - name: Publish the endpoints the other workflows need
+      - name: Show the values to store as repository variables
         run: |
-          terraform output -raw api_url
-          terraform output -raw instance_id
-          echo "Store api_url as the API_URL repository variable; the health check uses it."
+          echo "API_URL=$(terraform output -raw api_url)"
+          echo "INSTANCE_ID=$(terraform output -raw instance_id)"
+          echo "Both are printed above. Refresh API_URL in the repository variables after every apply that replaces the instance, or the 5-minute health check keeps polling a dead address."

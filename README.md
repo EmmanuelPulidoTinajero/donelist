@@ -60,6 +60,9 @@ curl http://<ec2-ip>:8000/version
 curl -i http://<ec2-ip>:8000/health
 ```
 
+Only `title` is read. The `done` field in the assignment's examples is ignored,
+and a new task always starts unfinished.
+
 ## Run locally
 
 ```bash
