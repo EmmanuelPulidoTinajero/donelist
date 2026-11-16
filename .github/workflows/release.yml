@@ -24,12 +24,17 @@ jobs:
           python3 - "$zip_name" <<'PY'
           import sys, zipfile
 
+          required = ("requirements.txt", "src/main.py", "src/server.py", "db/schema.sql")
           archive = zipfile.ZipFile(sys.argv[1])
           names = archive.namelist()
           if archive.testzip() is not None:
               sys.exit("The release archive is corrupt")
-          if not any(name.endswith("/package.json") for name in names):
-              sys.exit("The release archive is missing package.json")
+          missing = [
+              path for path in required
+              if not any(name.endswith("/" + path) for name in names)
+          ]
+          if missing:
+              sys.exit(f"The release archive is missing {', '.join(missing)}")
           print(f"{len(names)} entries in the release archive")
           PY
 
