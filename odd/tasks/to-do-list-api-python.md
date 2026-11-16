@@ -20,23 +20,24 @@ already froze. Read through `## Log` before acting.
 
 ## Tasks
 
-- T1 [S1,S3,S4,S5,S7] Python application: config, Secrets Manager resolution, psycopg pool, FastAPI routes, boto3 metric publisher, `requirements.txt`. Commit: `aa2ee34`.
-- T2 [S4,S5,S11] Pytest suite covering every behaviour the Node suite pinned, plus the publisher. Commit: `aa2ee34`.
-- T3 [S8,S9,S10] Terraform: fix the broken `user_data` comment, install the Python runtime, look the AMI up with a data source, default the app port to 8000, and stop depending on the SSH key for delivery. Commit: `718c4d1`.
-- T4 [S9] Workflows: pytest in CI, release asset check for the Python layout, SSM-based deploy, unchanged provision/destroy/health-monitor. Commit: `0ed1edc`.
-- T5 [S11] Local validation: `pytest`, `bash -n`, `terraform fmt -check -recursive`, `terraform validate`, `terraform plan` against the restored remote backend. Commit: `718c4d1` and `0ed1edc` carry the validated files; the plan itself is not committed.
+- T1 [S1,S3,S4,S5,S7] Python application: config, Secrets Manager resolution, psycopg pool, FastAPI routes, boto3 metric publisher, `requirements.txt`. Commit: `1091479`.
+- T2 [S4,S5,S11] Pytest suite covering every behaviour the Node suite pinned, plus the publisher. Commit: `1091479`.
+- T3 [S8,S9,S10] Terraform: fix the broken `user_data` comment, install the Python runtime, look the AMI up with a data source, default the app port to 8000, and stop depending on the SSH key for delivery. Commit: `81cb99c`.
+- T4 [S9] Workflows: pytest in CI, release asset check for the Python layout, SSM-based deploy, unchanged provision/destroy/health-monitor. Commit: `8c32ffa`.
+- T5 [S11] Local validation: `pytest`, `bash -n`, `terraform fmt -check -recursive`, `terraform validate`, `terraform plan` against the restored remote backend. Commit: `8c32ffa` carries the validated files; the plan itself is not committed.
 - T6 [S8,S9] Real deployment through Terraform and SSM and the evidence set the rubric requires (endpoints, `SELECT * FROM tasks`, metrics, alarms, dashboard, tfstate). Commit: pending.
 - T7 [S9] Tag `v1.1.0`, publish the release, deploy it through SSM and confirm `/version` advanced. Commit: pending.
-- T8 [S2] README rewrite for the Python layout plus the two-page report with the architecture diagram and the three reflection answers. Commit: README landed in `0ed1edc`; report pending.
-- T9 [S1] Remove the Node implementation, `observability/publish_metrics.py`, its tests and `package.json`. Commit: `aa2ee34`.
+- T8 [S2] README rewrite for the Python layout plus the two-page report with the architecture diagram and the three reflection answers. Commit: README landed in `8c32ffa`; report pending.
+- T9 [S1] Remove the Node implementation, `observability/publish_metrics.py`, its tests and `package.json`. Commit: `1091479`.
 
 ## Delivery slices
 
 Branch `feature/todo-list-terraform-rds`.
 
-- Slice 6 — closed: the Python API, its test suite and the Node removal, `aa2ee34`. 1343 authored lines: the whole application plus the suite, because splitting the app from the tests would leave an intermediate commit that cannot be run.
-- Slice 7 — closed: the repaired bootstrap and the Python runtime in `718c4d1`.
-- Slice 8 — closed: SSM delivery, CI hardening and the README in `0ed1edc`. The slice boundary for the next change is `0ed1edc`.
+- Slice 6 — closed: the Python API, its test suite and the Node removal, `1091479`. 1057 insertions and 2415 deletions: the whole application plus the suite, because splitting the app from the tests would leave an intermediate commit that cannot be run.
+- Slice 7 — closed: the repaired bootstrap and the Python runtime in `81cb99c`.
+- Slice 8 — closed: SSM delivery, CI hardening and the README in `8c32ffa`. The slice boundary for the next change is `8c32ffa`.
+- History note: an earlier attempt created `aa2ee34`, `718c4d1` and `0ed1edc` from a `git add` that a safety guard blocked, so `aa2ee34` contained only the Node deletions. The three commits were rebuilt from `27274df` before anything was pushed, and the slice commits above are the ones that count.
 
 ## Log
 
@@ -44,3 +45,4 @@ Branch `feature/todo-list-terraform-rds`.
 - L2: Review findings that drive this slice. Verified live: AWS credentials valid again (account 647018795197, role `voclabs`); no EC2, no RDS and no S3 buckets existed, so the `to-do-list-api-tfstate-647018795197` backend was gone and was recreated with versioning, AES256 and public-access block; `cloudwatch:PutMetricData` succeeds with the lab role; `LabRole` carries `AmazonSSMManagedInstanceCore`, which makes SSM Run Command available; default VPC `vpc-0d444a684030d7067` exists; `terraform fmt -check -recursive` passes; `node`/`npm` are absent and Python 3.14.7 is present. Critical defect confirmed by reading: `infra/user_data.sh.tftpl:9-10` lost the `#` on the second comment line, so `set -euo pipefail` aborted the bootstrap on a nonexistent command and no instance ever ran the app. Design defects accepted for change: SSH-based delivery with a Terraform-generated key re-copied into a repository secret, and a three-mechanism metrics file plus systemd timer that existed only because Node could not call boto3. Decisions taken with the author in this session: FastAPI + Uvicorn, SSM Run Command, in-process boto3 publishing, psycopg 3 with a pool.
 - L3: Toolchain findings while implementing. `psycopg[binary]` installs but cannot load `libpq` on this machine because Windows Smart App Control blocks the DLL, so `database.py` imports the driver lazily and the suite never needs it. A local module named `secrets.py` shadowed the standard library and broke FastAPI's own imports during collection; it was renamed to `credentials.py`. `terraform validate` initially failed on `user_data.sh.tftpl` because a comment contained an unescaped `${name}` that Terraform tried to resolve; both that comment and the file header now document the `$${NAME}` escape rule.
 - L4: Local validation evidence for T5. `pytest` 35 passed; `bash -n` clean on `infra/user_data.sh.tftpl` and `scripts/deploy-release.sh`; `terraform fmt -check -recursive` clean; `terraform validate` clean; `terraform plan` against the restored S3 backend reported `17 to add, 0 to change, 0 to destroy` and the `aws_ami` data source resolved `ami-0b71756f4d851f798`, the same image the hardcoded variable carried.
+- L5: Delivery is gated by receipt-driven development and the gate found three provider limits in sequence. (a) `lens_context_budget_exceeded` for the whole `27274df..HEAD` candidate: the provider refuses to truncate reviewer evidence, so the change has to be reviewed as the slice commits one at a time. (b) A `git push` was refused until the pending candidate carries a native review outcome. (c) `reviewer-empty-output` on slice 8: `nan/glm5.3-flash` spent its entire 16384-token output budget on reasoning and emitted no verdict for `review-resilience`. The project-local routing store `.pi/gentle-ai/models.json` was changed from `thinking: high` to `thinking: medium` for the four review lenses; the global store stays human-owned and untouched. Next step: re-run the slice review, then push and deploy.
