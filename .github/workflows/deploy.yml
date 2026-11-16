@@ -1,0 +1,96 @@
+name: Deploy release to EC2
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: infrastructure
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      # Delivery goes through SSM Run Command: the runner never opens port 22
+      # and no private key is stored as a repository secret. The script is sent
+      # as the command payload so the reviewed file in the repository is what
+      # actually runs on the instance.
+      - name: Build the remote command
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          ASSET_URL: ${{ github.event.release.assets[0].browser_download_url }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib
+
+          tag = os.environ["RELEASE_TAG"]
+          asset = os.environ["ASSET_URL"]
+          script = pathlib.Path("scripts/deploy-release.sh").read_text(encoding="utf-8")
+          if "DEPLOY_SCRIPT_EOF" in script:
+              raise SystemExit("The deploy script contains the heredoc delimiter")
+          command = "\n".join([
+              # No -e here: the exit code of the remote script is what has to
+              # reach SSM, so the cleanup below has to run first.
+              "set -uo pipefail",
+              "cat >/tmp/deploy-release.sh <<'DEPLOY_SCRIPT_EOF'",
+              script,
+              "DEPLOY_SCRIPT_EOF",
+              "chown ec2-user:ec2-user /tmp/deploy-release.sh",
+              # Run as the service user: root must never execute code that lives
+              # in a tree the unprivileged service account can write.
+              f"runuser -u ec2-user -- bash /tmp/deploy-release.sh '{tag}' '{asset}'",
+              "rc=$?",
+              "rm -f /tmp/deploy-release.sh",
+              "exit $rc",
+          ])
+          pathlib.Path("ssm-parameters.json").write_text(
+              json.dumps({"commands": [command]}), encoding="utf-8"
+          )
+          PY
+
+      - name: Deploy through SSM Run Command
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          PROJECT_NAME: ${{ vars.PROJECT_NAME || 'to-do-list-api' }}
+        run: |
+          instance_id=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=$PROJECT_NAME" "Name=instance-state-name,Values=running" \
+            --query 'Reservations[0].Instances[0].InstanceId' --output text)
+          test -n "$instance_id"
+          test "$instance_id" != "None"
+          command_id=$(aws ssm send-command \
+            --instance-ids "$instance_id" \
+            --document-name "AWS-RunShellScript" \
+            --comment "deploy ${RELEASE_TAG}" \
+            --parameters file://ssm-parameters.json \
+            --query 'Command.CommandId' --output text)
+          echo "instance=$instance_id command=$command_id"
+
+          status=Pending
+          # 60 x 5 s = 5 minutes. That is the budget a download plus a pip
+          # install has here; AWS-RunShellScript itself allows much longer, so a
+          # slower deploy is reported as failed while it may still finish.
+          for attempt in $(seq 1 60); do
+            status=$(aws ssm get-command-invocation \
+              --command-id "$command_id" --instance-id "$instance_id" \
+              --query Status --output text)
+            case "$status" in
+              Success|Failed|Cancelled|TimedOut) break ;;
+            esac
+            sleep 5
+          done
+
+          aws ssm get-command-invocation \
+            --command-id "$command_id" --instance-id "$instance_id" \
+            --query '[Status,StandardOutputContent,StandardErrorContent]' --output text
+          test "$status" = "Success"
