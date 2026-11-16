@@ -20,10 +20,9 @@
           "horizontal": [
             {
               "label": "Alarm threshold",
-              "value": "${connections_threshold}"
+              "value": ${connections_threshold}
             }
-          ],
-          "alarms": ["${native_alarm}"]
+          ]
         },
         "yAxis": {
           "left": {
@@ -50,9 +49,6 @@
           ["ToDoListApi", "DbReadErrors", { "label": "Failed reads" }],
           [".", "DbWriteErrors", { "label": "Failed writes" }]
         ],
-        "annotations": {
-          "alarms": ["${read_errors_alarm}", "${write_errors_alarm}"]
-        },
         "yAxis": {
           "left": {
             "min": 0,
@@ -75,9 +71,6 @@
         "stat": "Sum",
         "period": 300,
         "metrics": [["ToDoListApi", "TasksCreated"]],
-        "annotations": {
-          "alarms": ["${tasks_created_alarm}"]
-        },
         "yAxis": {
           "left": {
             "min": 0,
