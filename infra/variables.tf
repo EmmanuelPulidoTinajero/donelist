@@ -27,8 +27,10 @@ variable "instance_profile_name" {
 }
 
 variable "ami_id" {
-  description = "Amazon Linux 2023 AMI ID for the selected region."
+  description = "Deprecated: the AMI is resolved by the aws_ami data source. Kept only so an existing tfvars file still parses."
   type        = string
+  default     = null
+  nullable    = true
 }
 
 variable "instance_type" {
@@ -38,11 +40,13 @@ variable "instance_type" {
 }
 
 variable "ssh_cidr" {
-  description = "CIDR allowed to SSH to EC2. Required, with no default: the deploy workflow connects from GitHub-hosted runners, so allow those ranges or the addresses you actually use."
+  description = "Optional CIDR allowed to SSH to EC2. Null by default: delivery runs over SSM and interactive access uses SSM Session Manager, so port 22 stays closed."
   type        = string
+  default     = null
+  nullable    = true
 
   validation {
-    condition     = can(cidrhost(var.ssh_cidr, 0))
+    condition     = var.ssh_cidr == null || can(cidrhost(var.ssh_cidr, 0))
     error_message = "ssh_cidr must be a valid CIDR block, such as 203.0.113.10/32."
   }
 }
@@ -50,7 +54,7 @@ variable "ssh_cidr" {
 variable "app_port" {
   description = "Port exposed by the API."
   type        = number
-  default     = 3000
+  default     = 8000
 }
 
 variable "db_name" {

@@ -1,42 +1,81 @@
 #!/bin/bash
+# Bootstrap for the to-do-list-api instance.
+#
 # No `set -x` here: the trace would expand the secret payload and the database
 # password into /var/log/cloud-init-output.log and the serial console, which
 # defeats reading them from Secrets Manager. Progress is logged with echo lines.
+#
+# Terraform renders this file, so a literal shell parameter expansion has to be
+# written as $${NAME}; a bare $${name} is a Terraform variable.
 set -euo pipefail
 
+APP_DIR=/opt/to-do-list-api
+ENV_FILE=/etc/to-do-list-api.env
+SERVICE=to-do-list-api
+REPOSITORY_URL='${repository_url}'
+REPOSITORY_BRANCH='${repository_branch}'
+SECRET_ARN='${secret_arn}'
+AWS_REGION='${aws_region}'
+APP_VERSION='${app_version}'
+APP_PORT='${app_port}'
+
 echo 'Installing packages'
-dnf update -y
-# Amazon Linux 2023 ships Node.js under versioned package names; fall back to
-the plain package so either layout boots.
-if ! dnf install -y git nodejs awscli postgresql15 python3 python3-pip; then
-  echo 'Plain nodejs package unavailable, trying nodejs20'
-  dnf install -y git nodejs20 awscli postgresql15 python3 python3-pip
-fi
-command -v npm >/dev/null || { echo 'npm is not on PATH after package install' >&2; exit 1; }
+dnf install -y git postgresql15 python3 python3-pip
+# psycopg 3 requires Python 3.10 or newer. Amazon Linux 2023 publishes newer
+# interpreters as separate packages; install whichever the repository offers and
+# then pick the best one that actually exists on the box.
+for package in python3.12 python3.11; do
+  dnf install -y "$package" >/dev/null 2>&1 || true
+done
 
-mkdir -p /opt/to-do-list-api
-if [ -d /opt/to-do-list-api/.git ]; then
-  git -C /opt/to-do-list-api fetch --tags origin
-  git -C /opt/to-do-list-api checkout '${repository_branch}'
-  git -C /opt/to-do-list-api pull --ff-only
+PYTHON_BIN=''
+for candidate in python3.12 python3.11 python3; do
+  if command -v "$candidate" >/dev/null 2>&1 &&
+    "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'; then
+    PYTHON_BIN="$(command -v "$candidate")"
+    break
+  fi
+done
+if [ -z "$PYTHON_BIN" ]; then
+  echo 'No Python 3.10 or newer is available, so psycopg cannot be installed' >&2
+  exit 1
+fi
+echo "Bootstrapping with $PYTHON_BIN"
+
+if [ -d "$APP_DIR/.git" ]; then
+  git -C "$APP_DIR" fetch --tags origin
+  git -C "$APP_DIR" checkout "$REPOSITORY_BRANCH"
+  git -C "$APP_DIR" pull --ff-only
 else
-  git clone --branch '${repository_branch}' '${repository_url}' /opt/to-do-list-api
+  git clone --branch "$REPOSITORY_BRANCH" "$REPOSITORY_URL" "$APP_DIR"
 fi
 
-cd /opt/to-do-list-api
-npm ci --omit=dev
+cd "$APP_DIR"
+"$PYTHON_BIN" -m venv .venv
+.venv/bin/python -m pip install --quiet --upgrade pip
+.venv/bin/python -m pip install --quiet -r requirements.txt
 echo 'Application dependencies installed'
 
 # The schema bootstrap needs the credentials once; the service itself resolves
 # them from Secrets Manager at runtime through DB_SECRET_ARN.
 echo 'Reading the database credentials from Secrets Manager'
-SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id '${secret_arn}' --query SecretString --output text --region '${aws_region}')
-DB_HOST=$(printf '%s' "$SECRET_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["host"])')
-DB_PORT=$(printf '%s' "$SECRET_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["port"])')
-DB_NAME=$(printf '%s' "$SECRET_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["database"])')
-DB_USER=$(printf '%s' "$SECRET_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["username"])')
-DB_PASSWORD=$(printf '%s' "$SECRET_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["password"])')
+SECRET_JSON=$(
+  .venv/bin/python - "$SECRET_ARN" "$AWS_REGION" <<'PY'
+import sys
 
+import boto3
+
+client = boto3.client("secretsmanager", region_name=sys.argv[2])
+print(client.get_secret_value(SecretId=sys.argv[1])["SecretString"])
+PY
+)
+DB_HOST=$(printf '%s' "$SECRET_JSON" | .venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)["host"])')
+DB_PORT=$(printf '%s' "$SECRET_JSON" | .venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)["port"])')
+DB_NAME=$(printf '%s' "$SECRET_JSON" | .venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)["database"])')
+DB_USER=$(printf '%s' "$SECRET_JSON" | .venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)["username"])')
+DB_PASSWORD=$(printf '%s' "$SECRET_JSON" | .venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)["password"])')
+
+echo 'Applying db/schema.sql'
 for attempt in $(seq 1 30); do
   echo "Applying db/schema.sql (attempt $attempt of 30)"
   if PGPASSWORD="$DB_PASSWORD" psql "host=$DB_HOST port=$DB_PORT dbname=$DB_NAME user=$DB_USER sslmode=require" -f db/schema.sql; then
@@ -49,24 +88,17 @@ for attempt in $(seq 1 30); do
   sleep 10
 done
 
-mkdir -p /var/lib/to-do-list-api
-touch /var/lib/to-do-list-api/metrics.json
-
-cat > /etc/to-do-list-api.env <<EOF
-DB_SECRET_ARN=${secret_arn}
+cat >"$ENV_FILE" <<EOF
+DB_SECRET_ARN=$SECRET_ARN
 DB_SSL=true
-APP_VERSION=${app_version}
-PORT=${app_port}
-AWS_REGION=${aws_region}
-METRICS_FILE=/var/lib/to-do-list-api/metrics.json
+APP_VERSION=$APP_VERSION
+PORT=$APP_PORT
+AWS_REGION=$AWS_REGION
+METRICS_FLUSH_SECONDS=60
 EOF
-chmod 600 /etc/to-do-list-api.env
+chmod 600 "$ENV_FILE"
 
-# boto3 publisher: the only component that calls put_metric_data.
-python3 -m venv /opt/to-do-list-api-metrics
-/opt/to-do-list-api-metrics/bin/pip install --quiet --upgrade pip boto3
-
-cat > /etc/systemd/system/to-do-list-api.service <<'EOF'
+cat >/etc/systemd/system/$SERVICE.service <<'EOF'
 [Unit]
 Description=to-do-list-api
 After=network-online.target
@@ -75,9 +107,9 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=ec2-user
-WorkingDirectory=/opt/to-do-list-api
+WorkingDirectory=/opt/to-do-list-api/src
 EnvironmentFile=/etc/to-do-list-api.env
-ExecStart=/usr/bin/env npm start
+ExecStart=/opt/to-do-list-api/.venv/bin/python server.py
 Restart=on-failure
 RestartSec=5
 
@@ -85,34 +117,10 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-cat > /etc/systemd/system/to-do-list-api-metrics.service <<'EOF'
-[Unit]
-Description=Publish to-do-list-api counters to CloudWatch
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-User=ec2-user
-EnvironmentFile=/etc/to-do-list-api.env
-ExecStart=/opt/to-do-list-api-metrics/bin/python /opt/to-do-list-api/observability/publish_metrics.py
-EOF
-
-cat > /etc/systemd/system/to-do-list-api-metrics.timer <<'EOF'
-[Unit]
-Description=Publish to-do-list-api counters to CloudWatch every minute
-
-[Timer]
-OnBootSec=90
-OnUnitActiveSec=60
-AccuracySec=10s
-
-[Install]
-WantedBy=timers.target
-EOF
-
-chown -R ec2-user:ec2-user /opt/to-do-list-api /var/lib/to-do-list-api
+chown -R ec2-user:ec2-user "$APP_DIR"
 
 systemctl daemon-reload
-systemctl enable --now to-do-list-api
-systemctl enable --now to-do-list-api-metrics.timer
+systemctl enable --now "$SERVICE"
+# Session Manager is how operators get a shell without opening port 22.
+systemctl enable --now amazon-ssm-agent || true
+echo "to-do-list-api is enabled on port $APP_PORT"

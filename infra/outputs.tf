@@ -2,8 +2,18 @@ output "api_url" {
   value = "http://${aws_instance.app.public_ip}:${var.app_port}"
 }
 
+output "instance_id" {
+  value       = aws_instance.app.id
+  description = "Instance id, used for `aws ssm start-session --target`."
+}
+
 output "instance_public_ip" {
   value = aws_instance.app.public_ip
+}
+
+output "ami_id" {
+  value       = data.aws_ami.app.id
+  description = "AMI the data source resolved for this apply."
 }
 
 output "database_endpoint" {
@@ -43,6 +53,6 @@ output "key_pair_name" {
 
 output "ssh_private_key_pem" {
   value       = tls_private_key.ssh.private_key_pem
-  description = "Private key matching the generated key pair. Read it with: terraform output -raw ssh_private_key_pem > key.pem"
+  description = "Private key matching the generated key pair. The key pair satisfies the assignment requirement; day-to-day access goes through SSM Session Manager, so this is only a troubleshooting escape hatch."
   sensitive   = true
 }

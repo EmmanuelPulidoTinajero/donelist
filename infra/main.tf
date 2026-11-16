@@ -2,6 +2,23 @@ data "aws_vpc" "default" {
   default = true
 }
 
+# The AMI is looked up instead of hardcoded: the Learner Lab resets, and a stale
+# AMI id in a workflow variable is a failure nobody can see coming.
+data "aws_ami" "app" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["al2023-ami-2023.*-kernel-6.1-x86_64"]
+  }
+
+  filter {
+    name   = "state"
+    values = ["available"]
+  }
+}
+
 # The key pair is provisioned by Terraform: the private half stays in state and
 # is exposed only through the sensitive ssh_private_key_pem output.
 resource "tls_private_key" "ssh" {
@@ -40,7 +57,7 @@ resource "random_password" "db" {
 
 resource "aws_security_group" "app" {
   name        = "${var.project_name}-app"
-  description = "Allow API and SSH traffic to the EC2 application"
+  description = "Allow API traffic to the EC2 application"
   vpc_id      = data.aws_vpc.default.id
 
   ingress {
@@ -51,12 +68,18 @@ resource "aws_security_group" "app" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  ingress {
-    description = "SSH"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = [var.ssh_cidr]
+  # Delivery runs over SSM Run Command and interactive access over SSM Session
+  # Manager, so port 22 stays closed unless someone asks for it explicitly.
+  dynamic "ingress" {
+    for_each = var.ssh_cidr == null ? [] : [var.ssh_cidr]
+
+    content {
+      description = "SSH, only when ssh_cidr is supplied"
+      from_port   = 22
+      to_port     = 22
+      protocol    = "tcp"
+      cidr_blocks = [ingress.value]
+    }
   }
 
   egress {
@@ -128,7 +151,7 @@ resource "aws_secretsmanager_secret_version" "db" {
 }
 
 resource "aws_instance" "app" {
-  ami                         = var.ami_id
+  ami                         = data.aws_ami.app.id
   instance_type               = var.instance_type
   subnet_id                   = data.aws_subnet.app.id
   vpc_security_group_ids      = [aws_security_group.app.id]
