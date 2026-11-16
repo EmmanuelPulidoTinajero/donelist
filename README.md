@@ -175,6 +175,17 @@ Variables:
 `API_URL` changes with every new instance, and the lab credentials expire with
 the session, so those two are the ones to refresh each time.
 
+`scripts/set-github-config.sh` writes all nine values in one command. It reads
+the credentials from the AWS CLI profile and pipes them into `gh secret set`,
+so no key is ever printed or passed as an argument, and it refuses to write
+`TF_STATE_BUCKET` when the bucket does not exist, which would otherwise surface
+much later as a confusing `terraform init` failure:
+
+```bash
+./scripts/set-github-config.sh http://<instance-ip>:8000   # right after an apply
+./scripts/set-github-config.sh                             # credentials only
+```
+
 ## Observability
 
 Three metrics, three alarms, one SNS topic subscribed by email.
