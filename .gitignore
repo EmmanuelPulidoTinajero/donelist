@@ -1,5 +1,8 @@
-# Node dependencies
-node_modules/
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
 
 # Local .terraform directories
 .terraform/
@@ -53,6 +56,3 @@ tfplan.*
 
 # Local agent tooling state (model routing, session artifacts)
 .pi/
-# Python artifacts from the publisher tests
-__pycache__/
-*.pyc
