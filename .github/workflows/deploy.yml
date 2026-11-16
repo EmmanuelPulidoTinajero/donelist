@@ -47,8 +47,13 @@ jobs:
         run: |
           tag="${EVENT_TAG:-$INPUT_TAG}"
           test -n "$tag"
+          # gh exposes the asset's browser download URL as `url`; its JSON has no
+          # `browser_download_url` field, so reading that one yields empty and
+          # this step fails on a release that does carry its asset. `state`
+          # keeps a half-uploaded asset from being handed to the downloader.
           asset=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
-            --json assets --jq '.assets[0].browser_download_url // empty')
+            --json assets \
+            --jq '[.assets[] | select(.state == "uploaded")][0].url // empty')
           test -n "$asset" || { echo "release $tag has no asset to deploy" >&2; exit 1; }
           echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
           echo "ASSET_URL=$asset" >> "$GITHUB_ENV"
