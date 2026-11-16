@@ -3,6 +3,17 @@ name: Deploy release to EC2
 on:
   release:
     types: [published]
+  # A release published by release.yml carries the repository GITHUB_TOKEN, and
+  # GitHub suppresses workflow runs for events produced with that token, so
+  # `release: published` alone never reaches this workflow. release.yml
+  # dispatches it explicitly instead; workflow_dispatch is the documented
+  # exception to that suppression.
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag to deploy, for example v1.1.0
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -25,10 +36,25 @@ jobs:
       # and no private key is stored as a repository secret. The script is sent
       # as the command payload so the reviewed file in the repository is what
       # actually runs on the instance.
-      - name: Build the remote command
+      # Both trigger paths resolve the tag and the asset here, so the rest of
+      # the job never reads the release payload, which only exists on the
+      # event-driven path.
+      - name: Resolve the release tag and its asset
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          ASSET_URL: ${{ github.event.release.assets[0].browser_download_url }}
+          GH_TOKEN: ${{ github.token }}
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.release_tag }}
+        run: |
+          tag="${EVENT_TAG:-$INPUT_TAG}"
+          test -n "$tag"
+          asset=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
+            --json assets --jq '.assets[0].browser_download_url // empty')
+          test -n "$asset" || { echo "release $tag has no asset to deploy" >&2; exit 1; }
+          echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
+          echo "ASSET_URL=$asset" >> "$GITHUB_ENV"
+          echo "deploying $tag from $asset"
+
+      - name: Build the remote command
         run: |
           python3 - <<'PY'
           import json, os, pathlib
@@ -60,7 +86,6 @@ jobs:
 
       - name: Deploy through SSM Run Command
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
           PROJECT_NAME: ${{ vars.PROJECT_NAME || 'to-do-list-api' }}
         run: |
           instance_id=$(aws ec2 describe-instances \

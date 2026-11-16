@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: write
+  # Needed to request the deploy run: GITHUB_TOKEN events do not cascade.
+  actions: write
 
 jobs:
   release:
@@ -43,3 +45,17 @@ jobs:
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
           files: to-do-list-api-${{ github.ref_name }}.zip
+
+      # GITHUB_TOKEN does not cascade: the release created above would never
+      # enqueue deploy.yml, and nothing would report that the deploy was
+      # skipped. workflow_dispatch is the one documented exception, so the
+      # deploy is requested explicitly instead of waiting for the event.
+      - name: Dispatch the deploy workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh workflow run deploy.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "${{ github.event.repository.default_branch }}" \
+            -f release_tag="$RELEASE_TAG"
