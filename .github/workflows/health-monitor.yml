@@ -32,12 +32,13 @@ jobs:
         run: |
           title='[health-check-alert] API health check failing'
           body=$(printf 'The 5-minute health check failed.\n\nAPI: %s\nRun: %s\n' "$API_URL" "$RUN_URL")
-          existing=$(gh issue list --state open --search '"[health-check-alert]" in:title' \
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search '"[health-check-alert]" in:title' \
             --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
-            gh issue comment "$existing" --body "$body"
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
           else
-            gh issue create --title "$title" --body "$body"
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
           fi
 
       - name: Close the outage issue after recovery
@@ -46,8 +47,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          existing=$(gh issue list --state open --search '"[health-check-alert]" in:title' \
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search '"[health-check-alert]" in:title' \
             --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
-            gh issue close "$existing" --comment "The health check passed again. Run: $RUN_URL"
+            gh issue close "$existing" --repo "$GITHUB_REPOSITORY" \
+              --comment "The health check passed again. Run: $RUN_URL"
           fi
